@@ -1,0 +1,13 @@
+{
+    "model": "Random Forest Regressor",
+    "features": [
+        "median_income",
+        "latitude",
+        "longitude"
+    ],
+    "test_records": 4000,
+    "r2": 0.9782114000978019,
+    "mae": 189313.4956111132,
+    "rmse": 374405.07741482306,
+    "mape_percent": 8.799605448436184
+}

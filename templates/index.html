@@ -1,0 +1,550 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>Mumbai Housing Value Engine</title>
+
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+    >
+
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    >
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='style.css') }}"
+    >
+</head>
+
+<body>
+
+<header class="app-header">
+    <div class="brand">
+        <div class="brand-icon">H</div>
+
+        <div>
+            <div class="eyebrow">MACHINE LEARNING PROJECT</div>
+            <h1>Mumbai Housing Value Engine</h1>
+            <p>Interactive housing value exploration</p>
+        </div>
+    </div>
+
+    <div class="system-status">
+        <span class="status-dot"></span>
+        <span>Prediction engine ready</span>
+    </div>
+</header>
+
+<main class="dashboard">
+
+    <section class="workspace">
+
+        <!-- LEFT: INPUTS AND PREDICTION -->
+
+        <aside class="control-panel">
+
+            <div class="section-heading">
+                <div>
+                    <div class="eyebrow">PREDICTION INPUTS</div>
+                    <h2>Explore a location</h2>
+                </div>
+
+                <span class="feature-tag">3 features</span>
+            </div>
+
+            <div class="input-section">
+                <label for="monthlyIncome">
+                    Monthly household income
+                </label>
+
+                <div class="income-input">
+                    <span>₹</span>
+
+                    <input
+                        type="number"
+                        id="monthlyIncome"
+                        value="30000"
+                        min="1"
+                        step="1000"
+                        inputmode="decimal"
+                        autocomplete="off"
+                        aria-describedby="incomeHelp"
+                    >
+                </div>
+
+                <small class="field-help" id="incomeHelp">
+                    Change the income to recalculate automatically.
+                </small>
+            </div>
+
+            <div class="location-section">
+                <div class="location-heading">
+                    <div>
+                        <h3>Selected location</h3>
+                        <p>Move the marker using the map.</p>
+                    </div>
+
+                    <span class="location-pin">●</span>
+                </div>
+
+                <div class="coordinate-field">
+                    <label for="latitude">Latitude</label>
+                    <input
+                        type="text"
+                        id="latitude"
+                        value="19.117576"
+                        readonly
+                    >
+                </div>
+
+                <div class="coordinate-field">
+                    <label for="longitude">Longitude</label>
+                    <input
+                        type="text"
+                        id="longitude"
+                        value="72.870910"
+                        readonly
+                    >
+                </div>
+            </div>
+
+            <!-- LIVE RESULT -->
+
+            <section class="prediction-card" aria-live="polite">
+
+                <div class="prediction-card-top">
+                    <span class="result-symbol">↗</span>
+                    <span class="result-label">CURRENT ESTIMATE</span>
+                </div>
+
+                <div id="prediction" class="prediction-value">—</div>
+
+                <div id="predictionStatus" class="prediction-status">
+                    Preparing prediction…
+                </div>
+
+                <div class="prediction-divider"></div>
+
+                <div class="prediction-meta">
+                    <span id="modeText">Static pin mode</span>
+                    <span id="lastUpdated">Not updated yet</span>
+                </div>
+
+            </section>
+
+            <div class="interaction-guide">
+                <div class="guide-icon">⌖</div>
+
+                <div>
+                    <strong>Explore in real time</strong>
+                    <p>
+                        Click to select a location. Double-click the map
+                        to toggle live cursor tracking.
+                    </p>
+                </div>
+            </div>
+
+        </aside>
+
+
+        <!-- RIGHT: INTERACTIVE MAP -->
+
+        <section class="map-panel">
+
+            <div class="map-toolbar">
+                <div>
+                    <div class="eyebrow">GEOGRAPHIC EXPLORER</div>
+                    <h2>Explore Mumbai</h2>
+                    <p>Move your cursor over the map in live mode.</p>
+                </div>
+
+                <span id="modeBadge" class="mode-badge">
+                    STATIC MODE
+                </span>
+            </div>
+
+            <div class="map-container">
+                <div id="map"></div>
+
+                <div id="liveIndicator" class="live-indicator" hidden>
+                    <span class="live-dot"></span>
+                    LIVE TRACKING
+                </div>
+            </div>
+
+            <div class="map-footer">
+                <span>
+                    <span class="map-legend-dot"></span>
+                    Selected location
+                </span>
+
+                <span>Map data © OpenStreetMap contributors</span>
+            </div>
+
+        </section>
+
+    </section>
+
+    <footer class="app-footer">
+        Research prototype · Values are shown in the model's dataset units.
+        They are estimates, not verified market quotes.
+    </footer>
+
+</main>
+
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+"use strict";
+
+// ============================================================
+// CONFIGURATION
+// ============================================================
+
+const DEFAULT_LAT = 19.117576;
+const DEFAULT_LNG = 72.870910;
+
+const MIN_LAT = 18.80;
+const MAX_LAT = 19.35;
+const MIN_LNG = 72.70;
+const MAX_LNG = 73.10;
+
+// A maximum of about 5 prediction requests per second.
+// Newer cursor positions replace older queued positions.
+const MIN_REQUEST_INTERVAL_MS = 200;
+
+
+// ============================================================
+// DOM ELEMENTS
+// ============================================================
+
+const incomeInput = document.getElementById("monthlyIncome");
+const latitudeInput = document.getElementById("latitude");
+const longitudeInput = document.getElementById("longitude");
+
+const predictionElement = document.getElementById("prediction");
+const predictionStatus = document.getElementById("predictionStatus");
+
+const modeBadge = document.getElementById("modeBadge");
+const modeText = document.getElementById("modeText");
+const liveIndicator = document.getElementById("liveIndicator");
+const lastUpdated = document.getElementById("lastUpdated");
+
+
+// ============================================================
+// MAP INITIALIZATION
+// ============================================================
+
+const map = L.map("map", {
+    doubleClickZoom: false,
+    zoomControl: true
+}).setView([DEFAULT_LAT, DEFAULT_LNG], 12);
+
+L.tileLayer(
+    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors"
+    }
+).addTo(map);
+
+const marker = L.marker(
+    [DEFAULT_LAT, DEFAULT_LNG]
+).addTo(map);
+
+const mapBounds = L.latLngBounds(
+    [[MIN_LAT, MIN_LNG], [MAX_LAT, MAX_LNG]]
+);
+
+
+// ============================================================
+// STATE
+// ============================================================
+
+let liveTracking = false;
+
+let queuedTask = null;
+let queueRunning = false;
+let lastRequestStarted = 0;
+let stateRevision = 0;
+
+
+// ============================================================
+// HELPER FUNCTIONS
+// ============================================================
+
+function delay(milliseconds) {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+function isValidIncome(income) {
+    return Number.isFinite(income) && income > 0;
+}
+
+function isSupportedLocation(lat, lng) {
+    return (
+        Number.isFinite(lat) &&
+        Number.isFinite(lng) &&
+        lat >= MIN_LAT &&
+        lat <= MAX_LAT &&
+        lng >= MIN_LNG &&
+        lng <= MAX_LNG
+    );
+}
+
+function updateLocation(lat, lng) {
+    latitudeInput.value = lat.toFixed(6);
+    longitudeInput.value = lng.toFixed(6);
+
+    // Keep marker movement immediate and independent of API latency.
+    marker.setLatLng([lat, lng]);
+}
+
+function updateModeDisplay() {
+    if (liveTracking) {
+        modeBadge.textContent = "LIVE MODE";
+        modeBadge.classList.add("live");
+        modeText.textContent = "Live cursor tracking";
+        liveIndicator.hidden = false;
+        map.getContainer().style.cursor = "crosshair";
+    } else {
+        modeBadge.textContent = "STATIC MODE";
+        modeBadge.classList.remove("live");
+        modeText.textContent = "Static pin mode";
+        liveIndicator.hidden = true;
+        map.getContainer().style.cursor = "";
+    }
+}
+
+function showInvalidInput(message) {
+    // Invalidate any response that is still in flight.
+    stateRevision += 1;
+    queuedTask = null;
+
+    predictionElement.textContent = "—";
+    predictionStatus.textContent = message;
+}
+
+
+// ============================================================
+// QUEUE A PREDICTION
+// ============================================================
+
+function queuePrediction(lat, lng) {
+    const revision = ++stateRevision;
+    const income = Number(incomeInput.value);
+
+    if (!isValidIncome(income)) {
+        queuedTask = null;
+        predictionElement.textContent = "—";
+        predictionStatus.textContent =
+            "Enter a valid monthly income greater than zero.";
+        return;
+    }
+
+    if (!isSupportedLocation(lat, lng)) {
+        queuedTask = null;
+        predictionElement.textContent = "—";
+        predictionStatus.textContent =
+            "Move the cursor inside the supported Mumbai area.";
+        return;
+    }
+
+    // Only the most recent pending input is retained.
+    queuedTask = {
+        income: income,
+        latitude: lat,
+        longitude: lng,
+        revision: revision
+    };
+
+    predictionStatus.textContent = liveTracking
+        ? "Updating live estimate…"
+        : "Updating estimate…";
+
+    if (!queueRunning) {
+        void processPredictionQueue();
+    }
+}
+
+
+// ============================================================
+// PROCESS PREDICTIONS WITHOUT OVERLAPPING REQUESTS
+// ============================================================
+
+async function processPredictionQueue() {
+    if (queueRunning) return;
+
+    queueRunning = true;
+
+    try {
+        while (queuedTask !== null) {
+            let task = queuedTask;
+            queuedTask = null;
+
+            // Control the request frequency to keep tracking smooth.
+            const elapsed = Date.now() - lastRequestStarted;
+            const waitTime = Math.max(
+                0,
+                MIN_REQUEST_INTERVAL_MS - elapsed
+            );
+
+            if (waitTime > 0) {
+                await delay(waitTime);
+            }
+
+            // If the cursor moved during the delay, use its latest
+            // position instead of sending an outdated request.
+            if (queuedTask !== null) {
+                task = queuedTask;
+                queuedTask = null;
+            }
+
+            lastRequestStarted = Date.now();
+
+            try {
+                const response = await fetch("/predict", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        monthly_income: task.income,
+                        latitude: task.latitude,
+                        longitude: task.longitude
+                    })
+                });
+
+                const result = await response.json();
+
+                // Never display results from an older location or income.
+                if (task.revision !== stateRevision) {
+                    continue;
+                }
+
+                if (!response.ok || !result.success) {
+                    predictionElement.textContent = "—";
+                    predictionStatus.textContent =
+                        result.error || "Prediction could not be generated.";
+                    continue;
+                }
+
+                const value = Number(result.prediction);
+
+                if (!Number.isFinite(value)) {
+                    predictionElement.textContent = "—";
+                    predictionStatus.textContent =
+                        "The model returned an invalid result.";
+                    continue;
+                }
+
+                predictionElement.textContent =
+                    value.toLocaleString("en-IN", {
+                        maximumFractionDigits: 0
+                    });
+
+                predictionStatus.textContent = "Estimate updated";
+
+                lastUpdated.textContent =
+                    new Date().toLocaleTimeString();
+
+            } catch (error) {
+                if (task.revision === stateRevision) {
+                    console.error("Prediction request failed:", error);
+
+                    predictionElement.textContent = "—";
+                    predictionStatus.textContent =
+                        "Unable to connect to the prediction server.";
+                }
+            }
+        }
+    } finally {
+        queueRunning = false;
+
+        // Cover any latest event queued as the previous run finished.
+        if (queuedTask !== null) {
+            void processPredictionQueue();
+        }
+    }
+}
+
+
+// ============================================================
+// STATIC MODE: CLICK MAP TO SELECT LOCATION
+// ============================================================
+
+map.on("click", function(event) {
+    if (liveTracking) return;
+
+    const lat = event.latlng.lat;
+    const lng = event.latlng.lng;
+
+    updateLocation(lat, lng);
+    queuePrediction(lat, lng);
+});
+
+
+// ============================================================
+// DOUBLE-CLICK: TOGGLE LIVE CURSOR TRACKING
+// ============================================================
+
+map.on("dblclick", function(event) {
+    liveTracking = !liveTracking;
+    updateModeDisplay();
+
+    // Predict at the position where live mode was toggled.
+    updateLocation(event.latlng.lat, event.latlng.lng);
+    queuePrediction(event.latlng.lat, event.latlng.lng);
+});
+
+
+// ============================================================
+// LIVE CURSOR MOVEMENT
+// ============================================================
+
+map.on("mousemove", function(event) {
+    if (!liveTracking) return;
+
+    const lat = event.latlng.lat;
+    const lng = event.latlng.lng;
+
+    // The visual marker follows every mouse movement.
+    updateLocation(lat, lng);
+
+    // The request queue throttles predictions and keeps only the
+    // latest pending position, preventing requests from piling up.
+    queuePrediction(lat, lng);
+});
+
+
+// ============================================================
+// AUTOMATIC INCOME INPUT
+// ============================================================
+
+incomeInput.addEventListener("input", function() {
+    const position = marker.getLatLng();
+
+    // Updates as the user types. No button is needed.
+    queuePrediction(position.lat, position.lng);
+});
+
+
+// ============================================================
+// INITIAL PREDICTION
+// ============================================================
+
+updateModeDisplay();
+queuePrediction(DEFAULT_LAT, DEFAULT_LNG);
+
+</script>
+
+</body>
+</html>
